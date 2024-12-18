@@ -2,7 +2,7 @@ use env_logger;
 use log::{debug, error, info, max_level, warn};
 use serde_json::Value;
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::env;
 use std::io::Write;
 use std::net::TcpStream;
@@ -14,14 +14,10 @@ use tokio::time::{sleep, Duration};
 
 type ThreadSafeSignals = Arc<Mutex<HashMap<String, Box<dyn Any + Send + Sync>>>>;
 type ThreadSafeServers = Arc<Mutex<HashMap<String, ServerInfo>>>;
+type ThreadSafeClientsQueue = Arc<Mutex<VecDeque<String>>>;
+type ThreadSafeClientsSet = Arc<Mutex<HashSet<String>>>;
 
 const BUFFER_SIZE: usize = 8192;
-
-#[derive(Default)]
-struct Manager {
-    signals: ThreadSafeSignals,
-    servers: ThreadSafeServers,
-}
 
 #[derive(Clone, Eq, PartialEq)]
 enum Status {
@@ -44,7 +40,8 @@ async fn tcp_client(
     port: String,
     signals: ThreadSafeSignals,
     servers: ThreadSafeServers,
-    handler: impl Fn(ThreadSafeSignals, ThreadSafeServers, &Value),
+    clients: ThreadSafeClientsQueue,
+    //handler: impl Fn(ThreadSafeSignals, ThreadSafeServers, ThreadSafeClients, &Value),
 ) {
     let listener = TcpListener::bind(format!("{host}:{port}")).await.unwrap();
     info!(target:"manager", "Manager started listening on {host}:{port}");
@@ -74,7 +71,7 @@ async fn tcp_client(
                 match serde_json::from_str::<Value>(&received) {
                     Ok(json) => {
                         debug!("Deserialized JSON: {:#}", json);
-                        handler(signals.clone(), servers.clone(), &json);
+                        handle_tcp(signals.clone(), servers.clone(), clients.clone(), &json);
                     }
                     Err(e) => {
                         error!("Failed to deserialize into JSON: {:?}", e);
@@ -96,7 +93,12 @@ fn send_message(message: Value, host: String, port: String) -> Result<(), std::i
     }
 }
 
-fn handle_tcp(signals: ThreadSafeSignals, servers: ThreadSafeServers, message: &Value) {
+fn handle_tcp(
+    signals: ThreadSafeSignals,
+    servers: ThreadSafeServers,
+    clients: ThreadSafeClientsQueue,
+    message: &Value,
+) {
     if message.get("message_type").is_none() {
         warn!("Message {message} has no property message_type");
         return;
@@ -172,32 +174,13 @@ fn handle_tcp(signals: ThreadSafeSignals, servers: ThreadSafeServers, message: &
         "client_connect" => {
             debug!("Client connection message received");
         }
+        "client_disconnect" => {
+            debug!("Client disconnect message received");
+        }
         _ => {
             let invalid = message_type.as_str().unwrap();
             warn!("Unrecognized message type {invalid} received");
         }
-    }
-}
-
-impl Manager {
-    pub fn new() -> Manager {
-        let mut signals: HashMap<String, Box<dyn Any + Send + Sync>> = HashMap::new();
-        signals.insert("shutdown".to_owned(), Box::new(false));
-        Manager {
-            signals: Arc::new(Mutex::new(signals)),
-            servers: Arc::new(Mutex::new(HashMap::new())),
-        }
-    }
-    async fn start(&mut self, host: String, port: String) {
-        let tcp_thread = tokio::spawn(tcp_client(
-            host.clone(),
-            port.clone(),
-            self.signals.clone(),
-            self.servers.clone(),
-            handle_tcp,
-        ));
-        //TODO: Create UDP thread
-        tcp_thread.await.unwrap();
     }
 }
 
@@ -208,6 +191,17 @@ async fn main() {
     if args.len() != 3 {
         panic!("Usage: RUST_LOG=[debug|info|warn|error] target/release/manager [host] [port]");
     }
-    let mut manager: Manager = Manager::new();
-    manager.start(args[1].clone(), args[2].clone()).await;
+    let mut signals: HashMap<String, Box<dyn Any + Send + Sync>> = HashMap::new();
+    signals.insert("shutdown".to_owned(), Box::new(false));
+    let mut servers: ThreadSafeServers = Arc::new(Mutex::new(HashMap::new()));
+    let mut clients_queue: ThreadSafeClientsQueue = Arc::new(Mutex::new(VecDeque::new()));
+    let tcp_thread = tokio::spawn(tcp_client(
+        args[1].clone(),
+        args[2].clone(),
+        Arc::new(Mutex::new(signals)),
+        servers.clone(),
+        clients_queue.clone(),
+    ));
+
+    tcp_thread.await.unwrap();
 }
