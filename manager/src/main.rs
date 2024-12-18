@@ -1,29 +1,53 @@
 use env_logger;
-use log::{debug, error, info, warn};
+use log::{debug, error, info, max_level, warn};
 use serde_json::Value;
 use std::any::Any;
 use std::collections::HashMap;
 use std::io::Write;
 use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpSocket, UdpSocket};
 use tokio::time::{sleep, Duration};
 
 type ThreadSafeSignals = Arc<Mutex<HashMap<String, Box<dyn Any + Send + Sync>>>>;
+type ThreadSafeServers = Arc<Mutex<HashMap<String, ServerInfo>>>;
 
 const BUFFER_SIZE: usize = 8192;
 
 #[derive(Default)]
 struct Manager {
     signals: ThreadSafeSignals,
+    servers: ThreadSafeServers,
 }
 
-async fn tcp_client(signals: ThreadSafeSignals, handler: impl Fn(ThreadSafeSignals, &Value)) {
+#[derive(Clone, Eq, PartialEq)]
+enum Status {
+    ALIVE,
+    DEAD,
+}
+
+#[derive(Clone, Eq, PartialEq)]
+struct ServerInfo {
+    host: String,
+    port: String,
+    time_since_last_heartbeat: Instant,
+    num_clients: u64,
+    max_clients: u64,
+    status: Status,
+}
+
+async fn tcp_client(
+    signals: ThreadSafeSignals,
+    servers: ThreadSafeServers,
+    handler: impl Fn(ThreadSafeSignals, ThreadSafeServers, &Value),
+) {
     let listener = TcpListener::bind("localhost:8080").await.unwrap();
     info!(target:"manager", "Manager started listening on localhost:8080");
 
     loop {
+        sleep(Duration::from_micros(1)).await;
         let shutdown = {
             let sig = signals.lock().unwrap();
             sig.get("shutdown")
@@ -47,7 +71,7 @@ async fn tcp_client(signals: ThreadSafeSignals, handler: impl Fn(ThreadSafeSigna
                 match serde_json::from_str::<Value>(&received) {
                     Ok(json) => {
                         debug!("Deserialized JSON: {:#}", json);
-                        handler(signals.clone(), &json);
+                        handler(signals.clone(), servers.clone(), &json);
                     }
                     Err(e) => {
                         error!("Failed to deserialize into JSON: {:?}", e);
@@ -61,13 +85,15 @@ async fn tcp_client(signals: ThreadSafeSignals, handler: impl Fn(ThreadSafeSigna
     }
 }
 
-fn send_message(message: Value, host: String, port: String) {
+fn send_message(message: Value, host: String, port: String) -> Result<(), std::io::Error> {
     let addr = format!("{host}:{port}");
-    let mut socket = TcpStream::connect(addr).unwrap();
-    socket.write_all(message.to_string().as_bytes()).unwrap();
+    match TcpStream::connect(addr) {
+        Ok(mut socket) => socket.write_all(message.to_string().as_bytes()),
+        Err(e) => Err(std::io::Error::new(std::io::ErrorKind::Other, e)),
+    }
 }
 
-fn handle_tcp(signals: Arc<Mutex<HashMap<String, Box<dyn Any + Send + Sync>>>>, message: &Value) {
+fn handle_tcp(signals: ThreadSafeSignals, servers: ThreadSafeServers, message: &Value) {
     if message.get("message_type").is_none() {
         warn!("Message {message} has no property message_type");
         return;
@@ -79,12 +105,73 @@ fn handle_tcp(signals: Arc<Mutex<HashMap<String, Box<dyn Any + Send + Sync>>>>, 
     }
     match message_type.as_str().unwrap() {
         "shutdown" => {
-            debug!("Shutdown message received.");
+            debug!("Shutdown message received");
             *signals.lock().unwrap().get_mut("shutdown").unwrap() = Box::new(true);
+        }
+        "register" => {
+            debug!("Register message received");
+            let host = message
+                .get("host")
+                .expect("Host argument not found")
+                .as_str()
+                .expect("Host argument is not String")
+                .to_owned();
+
+            let port = message
+                .get("port")
+                .expect("Port argument not found")
+                .as_str()
+                .expect("Port argument is not String")
+                .to_owned();
+
+            let max_clients = message
+                .get("max_clients")
+                .expect("Max_clients argument not found")
+                .as_u64()
+                .expect("Max_clients is not u64");
+            if max_clients < 1 {
+                error!("Invalid max_clients: {max_clients} must be greater than 0");
+                return;
+            }
+
+            let address = format!("{host}:{port}");
+            if servers.lock().unwrap().get(&address).is_some()
+                && servers.lock().unwrap().get(&address).unwrap().status == Status::ALIVE
+            {
+                warn!("Addres {address} already registered");
+                return;
+            }
+            //TODO: handle fault tolerance
+            servers.lock().unwrap().insert(
+                address.clone(),
+                ServerInfo {
+                    host: host.clone(),
+                    port: port.clone(),
+                    num_clients: 0,
+                    max_clients,
+                    status: Status::ALIVE,
+                    time_since_last_heartbeat: Instant::now(),
+                },
+            );
+
+            match send_message(Value::from(r#"{"message_type": "ack"}"#), host, port) {
+                Ok(()) => info!("Successfully registered server at address {address}"),
+                Err(e) => {
+                    warn!("Error: {e} on address {address}");
+                    servers
+                        .lock()
+                        .unwrap()
+                        .entry(address.clone())
+                        .and_modify(|e| e.status = Status::DEAD);
+                }
+            }
+        }
+        "client_connect" => {
+            debug!("Client connection message received");
         }
         _ => {
             let invalid = message_type.as_str().unwrap();
-            warn!("Unrecognized message type {invalid}");
+            warn!("Unrecognized message type {invalid} received");
         }
     }
 }
@@ -95,10 +182,16 @@ impl Manager {
         signals.insert("shutdown".to_owned(), Box::new(false));
         Manager {
             signals: Arc::new(Mutex::new(signals)),
+            servers: Arc::new(Mutex::new(HashMap::new())),
         }
     }
-    async fn start(&self) {
-        let tcp_thread = tokio::spawn(tcp_client(self.signals.clone(), handle_tcp));
+    async fn start(&mut self) {
+        let tcp_thread = tokio::spawn(tcp_client(
+            self.signals.clone(),
+            self.servers.clone(),
+            handle_tcp,
+        ));
+        //TODO: Create UDP thread
         tcp_thread.await.unwrap();
     }
 }
@@ -106,6 +199,6 @@ impl Manager {
 #[tokio::main]
 async fn main() {
     env_logger::init();
-    let manager: Manager = Manager::new();
+    let mut manager: Manager = Manager::new();
     manager.start().await;
 }
