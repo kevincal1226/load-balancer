@@ -3,6 +3,7 @@ use log::{debug, error, info, max_level, warn};
 use serde_json::Value;
 use std::any::Any;
 use std::collections::HashMap;
+use std::env;
 use std::io::Write;
 use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
@@ -39,12 +40,14 @@ struct ServerInfo {
 }
 
 async fn tcp_client(
+    host: String,
+    port: String,
     signals: ThreadSafeSignals,
     servers: ThreadSafeServers,
     handler: impl Fn(ThreadSafeSignals, ThreadSafeServers, &Value),
 ) {
-    let listener = TcpListener::bind("localhost:8080").await.unwrap();
-    info!(target:"manager", "Manager started listening on localhost:8080");
+    let listener = TcpListener::bind(format!("{host}:{port}")).await.unwrap();
+    info!(target:"manager", "Manager started listening on {host}:{port}");
 
     loop {
         sleep(Duration::from_micros(1)).await;
@@ -185,8 +188,10 @@ impl Manager {
             servers: Arc::new(Mutex::new(HashMap::new())),
         }
     }
-    async fn start(&mut self) {
+    async fn start(&mut self, host: String, port: String) {
         let tcp_thread = tokio::spawn(tcp_client(
+            host.clone(),
+            port.clone(),
             self.signals.clone(),
             self.servers.clone(),
             handle_tcp,
@@ -199,6 +204,10 @@ impl Manager {
 #[tokio::main]
 async fn main() {
     env_logger::init();
+    let args: Vec<String> = env::args().collect();
+    if args.len() != 3 {
+        panic!("Usage: RUST_LOG=[debug|info|warn|error] target/release/manager [host] [port]");
+    }
     let mut manager: Manager = Manager::new();
-    manager.start().await;
+    manager.start(args[1].clone(), args[2].clone()).await;
 }
