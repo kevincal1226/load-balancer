@@ -3,21 +3,25 @@ use log::{debug, error, info, warn};
 use serde_json::Value;
 use std::any::Any;
 use std::collections::HashMap;
+use std::io::Write;
+use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, UdpSocket};
+use tokio::net::{TcpListener, TcpSocket, UdpSocket};
 use tokio::time::{sleep, Duration};
+
+type ThreadSafeSignals = Arc<Mutex<HashMap<String, Box<dyn Any + Send + Sync>>>>;
 
 const BUFFER_SIZE: usize = 8192;
 
 #[derive(Default)]
 struct Manager {
-    signals: Arc<Mutex<HashMap<String, Box<dyn Any + Send + Sync>>>>,
+    signals: ThreadSafeSignals,
 }
 
-async fn tcp_client(signals: Arc<Mutex<HashMap<String, Box<dyn Any + Send + Sync>>>>) {
-    let listener = TcpListener::bind("127.0.0.1:8080").await.unwrap();
-    info!(target:"manager", "Manager started listening on 127.0.0.1:8080");
+async fn tcp_client(signals: ThreadSafeSignals, handler: impl Fn(ThreadSafeSignals, &Value)) {
+    let listener = TcpListener::bind("localhost:8080").await.unwrap();
+    info!(target:"manager", "Manager started listening on localhost:8080");
 
     loop {
         let shutdown = {
@@ -39,14 +43,11 @@ async fn tcp_client(signals: Arc<Mutex<HashMap<String, Box<dyn Any + Send + Sync
         match socket.read(&mut buffer).await {
             Ok(bytes_read) => {
                 let received = String::from_utf8_lossy(&buffer[..bytes_read]);
-                info!("Received: {received}");
+                info!("Received message: {received}");
                 match serde_json::from_str::<Value>(&received) {
                     Ok(json) => {
                         debug!("Deserialized JSON: {:#}", json);
-                        socket
-                            .write_all(r#"{"message": "DIE"}"#.to_string().as_bytes())
-                            .await
-                            .unwrap();
+                        handler(signals.clone(), &json);
                     }
                     Err(e) => {
                         error!("Failed to deserialize into JSON: {:?}", e);
@@ -60,6 +61,34 @@ async fn tcp_client(signals: Arc<Mutex<HashMap<String, Box<dyn Any + Send + Sync
     }
 }
 
+fn send_message(message: Value, host: String, port: String) {
+    let addr = format!("{host}:{port}");
+    let mut socket = TcpStream::connect(addr).unwrap();
+    socket.write_all(message.to_string().as_bytes()).unwrap();
+}
+
+fn handle_tcp(signals: Arc<Mutex<HashMap<String, Box<dyn Any + Send + Sync>>>>, message: &Value) {
+    if message.get("message_type").is_none() {
+        warn!("Message {message} has no property message_type");
+        return;
+    }
+    let message_type = message["message_type"].clone();
+    if message_type.as_str().is_none() {
+        warn!("Message type {message_type} is not of type String");
+        return;
+    }
+    match message_type.as_str().unwrap() {
+        "shutdown" => {
+            debug!("Shutdown message received.");
+            *signals.lock().unwrap().get_mut("shutdown").unwrap() = Box::new(true);
+        }
+        _ => {
+            let invalid = message_type.as_str().unwrap();
+            warn!("Unrecognized message type {invalid}");
+        }
+    }
+}
+
 impl Manager {
     pub fn new() -> Manager {
         let mut signals: HashMap<String, Box<dyn Any + Send + Sync>> = HashMap::new();
@@ -69,12 +98,8 @@ impl Manager {
         }
     }
     async fn start(&self) {
-        let e = tokio::spawn(tcp_client(self.signals.clone()));
-        sleep(Duration::from_secs(2)).await;
-        *self.signals.lock().unwrap().get_mut("shutdown").unwrap() = Box::new(true);
-        println!("Set to true");
-        e.await.unwrap();
-        println!("Done");
+        let tcp_thread = tokio::spawn(tcp_client(self.signals.clone(), handle_tcp));
+        tcp_thread.await.unwrap();
     }
 }
 
