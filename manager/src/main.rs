@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::env;
 use std::io::Write;
 use std::net::TcpStream;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -180,7 +181,7 @@ fn handle_tcp(
             ) {
                 Ok(()) => info!("Successfully registered server at address {address}"),
                 Err(e) => {
-                    warn!("Error: {e} on address {address}");
+                    warn!("Warning: {e} on address {address}");
                     servers
                         .lock()
                         .unwrap()
@@ -253,7 +254,7 @@ fn handle_tcp(
                     )
                 }
 
-                None => warn!("Error: {client_host}:{client_port} is not a registered address"),
+                None => warn!("Warning: {client_host}:{client_port} is not a registered address"),
             }
         }
         _ => {
@@ -283,6 +284,50 @@ async fn assign_clients_to_server(
 
         if clients_queue.lock().unwrap().is_empty() {
             continue;
+        }
+
+        let client = clients_queue.lock().unwrap().front().unwrap().clone();
+
+        for (server_addr, server) in servers.lock().unwrap().iter_mut() {
+            if server.num_clients < server.max_clients {
+                all_clients
+                    .lock()
+                    .unwrap()
+                    .insert(client.clone(), server_addr.clone());
+                server.num_clients += 1;
+
+                clients_queue.lock().unwrap().pop_front();
+
+                info!(
+                    "Client at {}:{} has been sent to server {}:{}",
+                    client.0, client.1, server_addr.0, server_addr.1
+                );
+
+                match send_message(
+                    Value::from(
+                        r#"{"message_type": "redirect", "host": ""#.to_owned()
+                            + &server_addr.0
+                            + r#"", "port": ""#
+                            + &server_addr.1
+                            + r#""}"#,
+                    ),
+                    client.0.clone(),
+                    client.1.clone(),
+                ) {
+                    Ok(()) => debug!(
+                        "Sent redirect message to client at {}:{}",
+                        client.0, client.1
+                    ),
+                    Err(e) => {
+                        error!(
+                            "Error: {e} while trying to send message to client at {}:{}",
+                            client.0, client.1
+                        );
+                        server.num_clients -= 1;
+                    }
+                }
+                break;
+            }
         }
     }
     debug!("Shutting down assign_clients_to_server thread");
