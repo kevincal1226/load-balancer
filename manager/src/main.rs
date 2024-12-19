@@ -1,5 +1,4 @@
-use env_logger;
-use log::{debug, error, info, max_level, warn};
+use log::{debug, error, info, warn};
 use serde_json::Value;
 use std::any::Any;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -13,19 +12,19 @@ use tokio::net::{TcpListener, TcpSocket, UdpSocket};
 use tokio::time::{sleep, Duration};
 
 type ThreadSafeSignals = Arc<Mutex<HashMap<String, Box<dyn Any + Send + Sync>>>>;
-type ThreadSafeServers = Arc<Mutex<HashMap<String, ServerInfo>>>;
-type ThreadSafeClientsQueue = Arc<Mutex<VecDeque<String>>>;
-type ThreadSafeClientsSet = Arc<Mutex<HashSet<String>>>;
+type ThreadSafeServers = Arc<Mutex<HashMap<(String, String), ServerInfo>>>;
+type ThreadSafeClientsQueue = Arc<Mutex<VecDeque<(String, String)>>>;
+type ThreadSafeClientsMap = Arc<Mutex<HashMap<(String, String), (String, String)>>>;
 
 const BUFFER_SIZE: usize = 8192;
 
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum Status {
-    ALIVE,
-    DEAD,
+    Alive,
+    Dead,
 }
 
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 struct ServerInfo {
     host: String,
     port: String,
@@ -35,32 +34,37 @@ struct ServerInfo {
     status: Status,
 }
 
+fn send_message(message: Value, host: String, port: String) -> Result<(), std::io::Error> {
+    let addr = format!("{host}:{port}");
+    match TcpStream::connect(addr) {
+        Ok(mut socket) => socket.write_all(message.to_string().as_bytes()),
+        Err(e) => Err(std::io::Error::new(std::io::ErrorKind::Other, e)),
+    }
+}
+
 async fn tcp_client(
     host: String,
     port: String,
     signals: ThreadSafeSignals,
     servers: ThreadSafeServers,
-    clients: ThreadSafeClientsQueue,
-    //handler: impl Fn(ThreadSafeSignals, ThreadSafeServers, ThreadSafeClients, &Value),
+    clients_queue: ThreadSafeClientsQueue,
+    all_clients: ThreadSafeClientsMap,
 ) {
     let listener = TcpListener::bind(format!("{host}:{port}")).await.unwrap();
     info!(target:"manager", "Manager started listening on {host}:{port}");
 
-    loop {
+    while !signals
+        .lock()
+        .unwrap()
+        .get("shutdown")
+        .unwrap()
+        .downcast_ref::<bool>()
+        .unwrap()
+    {
         sleep(Duration::from_micros(1)).await;
-        let shutdown = {
-            let sig = signals.lock().unwrap();
-            sig.get("shutdown")
-                .and_then(|s| s.downcast_ref::<bool>())
-                .copied()
-                .unwrap()
-        };
-        if shutdown {
-            println!("Exiting");
-            return;
-        }
+
         let (mut socket, addr) = listener.accept().await.unwrap();
-        info!("New connection from: {}", addr);
+        debug!("New connection from: {}", addr);
 
         let mut buffer = [0; BUFFER_SIZE];
 
@@ -71,7 +75,13 @@ async fn tcp_client(
                 match serde_json::from_str::<Value>(&received) {
                     Ok(json) => {
                         debug!("Deserialized JSON: {:#}", json);
-                        handle_tcp(signals.clone(), servers.clone(), clients.clone(), &json);
+                        handle_tcp(
+                            signals.clone(),
+                            servers.clone(),
+                            clients_queue.clone(),
+                            all_clients.clone(),
+                            &json,
+                        );
                     }
                     Err(e) => {
                         error!("Failed to deserialize into JSON: {:?}", e);
@@ -83,20 +93,14 @@ async fn tcp_client(
             }
         }
     }
-}
-
-fn send_message(message: Value, host: String, port: String) -> Result<(), std::io::Error> {
-    let addr = format!("{host}:{port}");
-    match TcpStream::connect(addr) {
-        Ok(mut socket) => socket.write_all(message.to_string().as_bytes()),
-        Err(e) => Err(std::io::Error::new(std::io::ErrorKind::Other, e)),
-    }
+    debug!("Shutting down tcp_client thread");
 }
 
 fn handle_tcp(
     signals: ThreadSafeSignals,
     servers: ThreadSafeServers,
-    clients: ThreadSafeClientsQueue,
+    clients_queue: ThreadSafeClientsQueue,
+    all_clients: ThreadSafeClientsMap,
     message: &Value,
 ) {
     if message.get("message_type").is_none() {
@@ -140,48 +144,148 @@ fn handle_tcp(
             }
 
             let address = format!("{host}:{port}");
-            if servers.lock().unwrap().get(&address).is_some()
-                && servers.lock().unwrap().get(&address).unwrap().status == Status::ALIVE
+            if servers
+                .lock()
+                .unwrap()
+                .get(&(host.clone(), port.clone()))
+                .is_some()
+                && servers
+                    .lock()
+                    .unwrap()
+                    .get(&(host.clone(), port.clone()))
+                    .unwrap()
+                    .status
+                    == Status::Alive
             {
                 warn!("Addres {address} already registered");
                 return;
             }
             //TODO: handle fault tolerance
             servers.lock().unwrap().insert(
-                address.clone(),
+                (host.clone(), port.clone()),
                 ServerInfo {
                     host: host.clone(),
                     port: port.clone(),
                     num_clients: 0,
                     max_clients,
-                    status: Status::ALIVE,
+                    status: Status::Alive,
                     time_since_last_heartbeat: Instant::now(),
                 },
             );
 
-            match send_message(Value::from(r#"{"message_type": "ack"}"#), host, port) {
+            match send_message(
+                Value::from(r#"{"message_type": "ack"}"#),
+                host.clone(),
+                port.clone(),
+            ) {
                 Ok(()) => info!("Successfully registered server at address {address}"),
                 Err(e) => {
                     warn!("Error: {e} on address {address}");
                     servers
                         .lock()
                         .unwrap()
-                        .entry(address.clone())
-                        .and_modify(|e| e.status = Status::DEAD);
+                        .entry((host.clone(), port.clone()))
+                        .and_modify(|e| e.status = Status::Dead);
                 }
             }
         }
         "client_connect" => {
             debug!("Client connection message received");
+
+            let client_host = message
+                .get("host")
+                .expect("Host argument not found")
+                .as_str()
+                .expect("Host argument is not a string")
+                .to_owned();
+
+            let client_port = message
+                .get("port")
+                .expect("Port argument not found")
+                .as_str()
+                .expect("Port argument is not a string")
+                .to_owned();
+
+            match all_clients
+                .lock()
+                .unwrap()
+                .contains_key(&(client_host.clone(), client_port.clone()))
+            {
+                true => warn!("Client at {client_host}:{client_port} is already in use"),
+                false => clients_queue
+                    .lock()
+                    .unwrap()
+                    .push_back((client_host.clone(), client_port.clone())),
+            }
         }
         "client_disconnect" => {
             debug!("Client disconnect message received");
+
+            let client_host = message
+                .get("host")
+                .expect("Host argument not found")
+                .as_str()
+                .expect("Host argument is not a string")
+                .to_owned();
+
+            let client_port = message
+                .get("port")
+                .expect("Port argument not found")
+                .as_str()
+                .expect("Port argument is not a string")
+                .to_owned();
+
+            let res = all_clients
+                .lock()
+                .unwrap()
+                .remove_entry(&(client_host.clone(), client_port.clone()));
+
+            match res {
+                Some((_, server_addr)) => {
+                    servers
+                        .lock()
+                        .unwrap()
+                        .entry(server_addr.clone())
+                        .and_modify(|s| s.num_clients -= 1);
+                    info!(
+                        "Removed client at {client_host}:{client_port} from server address {}:{}",
+                        server_addr.0, server_addr.1
+                    )
+                }
+
+                None => warn!("Error: {client_host}:{client_port} is not a registered address"),
+            }
         }
         _ => {
             let invalid = message_type.as_str().unwrap();
             warn!("Unrecognized message type {invalid} received");
         }
     }
+}
+
+async fn assign_clients_to_server(
+    signals: ThreadSafeSignals,
+    servers: ThreadSafeServers,
+    clients_queue: ThreadSafeClientsQueue,
+    all_clients: ThreadSafeClientsMap,
+) {
+    debug!("Starting assign_clients_to_server thread");
+
+    while !signals
+        .lock()
+        .unwrap()
+        .get("shutdown")
+        .unwrap()
+        .downcast_ref::<bool>()
+        .unwrap()
+    {
+        sleep(Duration::from_millis(1)).await;
+
+        if clients_queue.lock().unwrap().is_empty() {
+            continue;
+        }
+    }
+    debug!("Shutting down assign_clients_to_server thread");
 }
 
 #[tokio::main]
@@ -191,17 +295,35 @@ async fn main() {
     if args.len() != 3 {
         panic!("Usage: RUST_LOG=[debug|info|warn|error] target/release/manager [host] [port]");
     }
-    let mut signals: HashMap<String, Box<dyn Any + Send + Sync>> = HashMap::new();
-    signals.insert("shutdown".to_owned(), Box::new(false));
-    let mut servers: ThreadSafeServers = Arc::new(Mutex::new(HashMap::new()));
-    let mut clients_queue: ThreadSafeClientsQueue = Arc::new(Mutex::new(VecDeque::new()));
+    let signals: ThreadSafeSignals = Arc::new(Mutex::new(HashMap::from([(
+        "shutdown".to_owned(),
+        Box::new(false) as Box<dyn Any + Send + Sync>,
+    )])));
+    let servers: ThreadSafeServers = Arc::new(Mutex::new(HashMap::new()));
+
+    let clients_queue: ThreadSafeClientsQueue = Arc::new(Mutex::new(VecDeque::new()));
+
+    // All the clients currently connected to a server.
+    // Does not include those waiting in the clients_queue.
+    let all_clients: ThreadSafeClientsMap = Arc::new(Mutex::new(HashMap::new()));
+
     let tcp_thread = tokio::spawn(tcp_client(
         args[1].clone(),
         args[2].clone(),
-        Arc::new(Mutex::new(signals)),
+        signals.clone(),
         servers.clone(),
         clients_queue.clone(),
+        all_clients.clone(),
     ));
 
+    let assign_clients_thread = tokio::spawn(assign_clients_to_server(
+        signals.clone(),
+        servers.clone(),
+        clients_queue.clone(),
+        all_clients.clone(),
+    ));
+    //TODO: Add UDP socket for heatbeats
+
     tcp_thread.await.unwrap();
+    assign_clients_thread.await.unwrap();
 }
