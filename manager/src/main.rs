@@ -6,7 +6,7 @@ use std::env;
 use std::io::Write;
 use std::net::{SocketAddr, TcpStream};
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpSocket, UdpSocket};
@@ -19,6 +19,7 @@ type ThreadSafeClientsMap = Arc<Mutex<HashMap<(String, String), (String, String)
 type ThreadSafeClientsSet = Arc<Mutex<HashSet<(String, String)>>>;
 
 const BUFFER_SIZE: usize = 8192;
+const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum Status {
@@ -71,8 +72,8 @@ async fn tcp_client(
 
         let mut buffer = [0; BUFFER_SIZE];
 
-        match socket.read(&mut buffer).await {
-            Ok(bytes_read) => {
+        match timeout(Duration::from_secs(2), socket.read(&mut buffer)).await {
+            Ok(Ok(bytes_read)) => {
                 let received = String::from_utf8_lossy(&buffer[..bytes_read]);
                 info!("Received message:\n{received}");
                 match serde_json::from_str::<Value>(&received) {
@@ -91,7 +92,8 @@ async fn tcp_client(
                     }
                 }
             }
-            Err(e) => {
+            Err(_) => (),
+            Ok(Err(e)) => {
                 error!("Failed to read from socket: {:?}", e);
             }
         }
@@ -147,24 +149,40 @@ fn handle_tcp(
             }
 
             let address = format!("{host}:{port}");
-            if servers
-                .lock()
-                .unwrap()
-                .get(&(host.clone(), port.clone()))
-                .is_some()
-                && servers
+
+            let mut servers_binding = servers.lock().unwrap();
+            let server = servers_binding.get_mut(&(host.clone(), port.clone()));
+
+            if server.as_ref().is_some_and(|s| s.status == Status::Alive) {
+                // Fault tolerance instance where server re-registers before manager marks as dead
+                // Must send clients at the re-registered server to the clients_queue to be
+                // redirected
+
+                server
+                    .as_ref()
+                    .unwrap()
+                    .curr_clients
                     .lock()
                     .unwrap()
-                    .get(&(host.clone(), port.clone()))
+                    .iter()
+                    .for_each(|i| {
+                        clients_queue.lock().unwrap().push_back(i.clone());
+                        all_clients.lock().unwrap().remove_entry(i);
+                    });
+
+                server
+                    .as_ref()
                     .unwrap()
-                    .status
-                    == Status::Alive
-            {
-                warn!("Addres {address} already registered");
+                    .curr_clients
+                    .lock()
+                    .unwrap()
+                    .clear();
+
+                info!("Server at port {}:{} re-registered before manager could mark as dead. Adding old clients to clients_queue", host, port);
+
                 return;
             }
-            //TODO: handle fault tolerance
-            servers.lock().unwrap().insert(
+            servers_binding.insert(
                 (host.clone(), port.clone()),
                 ServerInfo {
                     host: host.clone(),
@@ -304,19 +322,23 @@ async fn assign_clients_to_server(
             continue;
         }
 
-        let mut binding = servers.lock().unwrap();
-        let (server_addr, server) = binding
+        let mut servers_binding = servers.lock().unwrap();
+        let (server_addr, server) = servers_binding
             .iter_mut()
             .min_by(|x, y| {
-                (y.1.curr_clients.lock().unwrap().len() as f64 / y.1.max_clients as f64)
-                    .partial_cmp(
-                        &(x.1.curr_clients.lock().unwrap().len() as f64 / x.1.max_clients as f64),
-                    )
-                    .unwrap()
+                let x_val = x.1.curr_clients.lock().unwrap().len() as f64 / x.1.max_clients as f64
+                    + (x.1.status == Status::Dead) as i64 as f64;
+
+                let y_val = y.1.curr_clients.lock().unwrap().len() as f64 / y.1.max_clients as f64
+                    + (y.1.status == Status::Dead) as i64 as f64;
+
+                x_val.partial_cmp(&y_val).unwrap()
             })
             .unwrap();
 
-        if server.curr_clients.lock().unwrap().len() >= server.max_clients {
+        if server.status == Status::Dead
+            || server.curr_clients.lock().unwrap().len() >= server.max_clients
+        {
             continue;
         }
 
@@ -429,8 +451,8 @@ fn handle_udp(message: &Value, servers: ThreadSafeServers) {
                 .expect("Port argument is not String")
                 .to_owned();
 
-            let mut binding = servers.lock().unwrap();
-            let server = binding.get_mut(&(host.clone(), port.clone()));
+            let mut servers_binding = servers.lock().unwrap();
+            let server = servers_binding.get_mut(&(host.clone(), port.clone()));
 
             match server.is_some() && server.as_ref().unwrap().status == Status::Alive {
                 true => {
@@ -452,6 +474,7 @@ async fn fault_tolerance(
     signals: ThreadSafeSignals,
     servers: ThreadSafeServers,
     clients_queue: ThreadSafeClientsQueue,
+    all_clients: ThreadSafeClientsMap,
 ) {
     debug!("Starting fault_tolerance thread");
 
@@ -464,6 +487,30 @@ async fn fault_tolerance(
         .unwrap()
     {
         sleep(Duration::from_millis(100)).await;
+
+        servers
+            .lock()
+            .unwrap()
+            .iter_mut()
+            .filter(|(_, v)| {
+                v.status == Status::Alive
+                    && v.time_since_last_heartbeat.elapsed() >= HEARTBEAT_TIMEOUT
+            })
+            .for_each(|(server_addr, server)| {
+                server.status = Status::Dead;
+
+                server.curr_clients.lock().unwrap().iter().for_each(|i| {
+                    clients_queue.lock().unwrap().push_back(i.clone());
+                    all_clients.lock().unwrap().remove_entry(i);
+                });
+
+                server.curr_clients.lock().unwrap().clear();
+
+                info!(
+                    "Server at address {}:{} died. Moving clients into clients_queue",
+                    server_addr.0, server_addr.1
+                );
+            });
     }
     debug!("Shutting down fault_tolerance thread");
 }
@@ -514,6 +561,7 @@ async fn main() {
         signals.clone(),
         servers.clone(),
         clients_queue.clone(),
+        all_clients.clone(),
     ));
 
     tcp_thread.await.unwrap();
