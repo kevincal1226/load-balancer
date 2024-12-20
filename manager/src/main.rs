@@ -209,17 +209,12 @@ fn handle_tcp(
                 .expect("Port argument is not a string")
                 .to_owned();
 
-            match all_clients
+            clients_queue
                 .lock()
                 .unwrap()
-                .contains_key(&(client_host.clone(), client_port.clone()))
-            {
-                true => warn!("Client at {client_host}:{client_port} is already in use"),
-                false => clients_queue
-                    .lock()
-                    .unwrap()
-                    .push_back((client_host.clone(), client_port.clone())),
-            }
+                .push_back((client_host.clone(), client_port.clone()));
+
+            info!("Added client at {client_host}:{client_port} to the clients queue");
         }
         "client_disconnect" => {
             debug!("Client disconnect message received");
@@ -292,9 +287,20 @@ async fn assign_clients_to_server(
         .downcast_ref::<bool>()
         .unwrap()
     {
-        sleep(Duration::from_millis(1)).await;
+        sleep(Duration::from_millis(100)).await;
 
         if clients_queue.lock().unwrap().is_empty() || servers.lock().unwrap().is_empty() {
+            continue;
+        }
+
+        let client = clients_queue.lock().unwrap().front().unwrap().clone();
+
+        if all_clients.lock().unwrap().contains_key(&client) {
+            warn!(
+                "Client at address {}:{} was processed in queue twice. Second instance ignored",
+                client.0, client.1
+            );
+            clients_queue.lock().unwrap().pop_front();
             continue;
         }
 
@@ -355,8 +361,6 @@ async fn udp_client(
     port: String,
     signals: ThreadSafeSignals,
     servers: ThreadSafeServers,
-    clients_queue: ThreadSafeClientsQueue,
-    all_clients: ThreadSafeClientsMap,
 ) {
     debug!("Starting udp_client thread");
 
@@ -371,7 +375,7 @@ async fn udp_client(
         .downcast_ref::<bool>()
         .unwrap()
     {
-        sleep(Duration::from_millis(1)).await;
+        sleep(Duration::from_millis(100)).await;
 
         let mut buffer = [0; BUFFER_SIZE];
 
@@ -388,7 +392,9 @@ async fn udp_client(
                     Err(e) => error!("Failed to deserialize into JSON: {:?}", e),
                 }
             }
-            Err(_) => (), // This is the case where a timeout occurs, doesn't really matter
+            Err(_) => (), // This is the case where a timeout occurs, doesn't really matter. But,
+            // we don't want to block the TCP thread from listening indefinitely if we never
+            // receive a UDP message
             Ok(Err(e)) => error!("Failed to read from udp socket: {:?}", e),
         }
     }
@@ -442,6 +448,26 @@ fn handle_udp(message: &Value, servers: ThreadSafeServers) {
     }
 }
 
+async fn fault_tolerance(
+    signals: ThreadSafeSignals,
+    servers: ThreadSafeServers,
+    clients_queue: ThreadSafeClientsQueue,
+) {
+    debug!("Starting fault_tolerance thread");
+
+    while !signals
+        .lock()
+        .unwrap()
+        .get("shutdown")
+        .unwrap()
+        .downcast_ref::<bool>()
+        .unwrap()
+    {
+        sleep(Duration::from_millis(100)).await;
+    }
+    debug!("Shutting down fault_tolerance thread");
+}
+
 #[tokio::main]
 async fn main() {
     env_logger::init();
@@ -482,11 +508,16 @@ async fn main() {
         args[2].clone(),
         signals.clone(),
         servers.clone(),
+    ));
+
+    let fault_tolerance = tokio::spawn(fault_tolerance(
+        signals.clone(),
+        servers.clone(),
         clients_queue.clone(),
-        all_clients.clone(),
     ));
 
     tcp_thread.await.unwrap();
     assign_clients_thread.await.unwrap();
     udp_client.await.unwrap();
+    fault_tolerance.await.unwrap();
 }
