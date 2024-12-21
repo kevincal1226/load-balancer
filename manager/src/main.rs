@@ -38,7 +38,15 @@ struct ServerInfo {
 fn send_message(message: Value, host: String, port: String) -> Result<(), std::io::Error> {
     let addr = format!("{host}:{port}");
     match TcpStream::connect(addr) {
-        Ok(mut socket) => socket.write_all(message.to_string().as_bytes()),
+        Ok(mut socket) => {
+            debug!(
+                "Attempting to send message: {} to {}:{}",
+                message.to_string(),
+                host,
+                port
+            );
+            socket.write_all(message.to_string().as_bytes())
+        }
         Err(e) => Err(std::io::Error::new(std::io::ErrorKind::Other, e)),
     }
 }
@@ -63,7 +71,7 @@ async fn tcp_client(
         .downcast_ref::<bool>()
         .unwrap()
     {
-        sleep(Duration::from_micros(1)).await;
+        sleep(Duration::from_millis(100)).await;
 
         let (mut socket, addr) = listener.accept().await.unwrap();
         debug!("New connection from: {}", addr);
@@ -73,10 +81,10 @@ async fn tcp_client(
         match timeout(Duration::from_secs(2), socket.read(&mut buffer)).await {
             Ok(Ok(bytes_read)) => {
                 let received = String::from_utf8_lossy(&buffer[..bytes_read]);
-                info!("Received message:\n{received}");
+                info!("Received TCP message:\n{received}");
                 match serde_json::from_str::<Value>(&received) {
                     Ok(json) => {
-                        debug!("Deserialized JSON:\n{:#}", json);
+                        debug!("Deserialized TCP JSON:\n{:#}", json);
                         handle_tcp(
                             signals.clone(),
                             servers.clone(),
@@ -86,7 +94,7 @@ async fn tcp_client(
                         );
                     }
                     Err(e) => {
-                        error!("Failed to deserialize into JSON: {:?}", e);
+                        error!("Failed to deserialize TCP message into JSON: {:?}", e);
                     }
                 }
             }
@@ -217,7 +225,7 @@ fn handle_tcp(
             );
 
             match send_message(
-                Value::from_str(r#"{"message_type": "ack"}"#).unwrap(),
+                Value::from_str(r#"{"message_type": "register_ack"}"#).unwrap(),
                 host.clone(),
                 port.clone(),
             ) {
@@ -426,14 +434,17 @@ async fn udp_client(
         match timeout(Duration::from_secs(2), sock.recv_from(&mut buffer)).await {
             Ok(Ok((bytes_read, _))) => {
                 let received = String::from_utf8_lossy(&buffer[..bytes_read]);
-                info!("Received message:\n{received}");
+                info!("Received UDP message:\n{received}");
 
                 match serde_json::from_str::<Value>(&received) {
                     Ok(json) => {
-                        debug!("Deserialized JSON:\n{:#}", json);
+                        debug!("Deserialized UDP JSON:\n{:#}", json);
                         handle_udp(&json, servers.clone());
                     }
-                    Err(e) => error!("Failed to deserialize into JSON: {:?}", e),
+                    Err(e) => error!(
+                        "Failed to deserialize UDP messag UDP message into JSON: {:?}",
+                        e
+                    ),
                 }
             }
             Err(_) => (), // This is the case where a timeout occurs, doesn't really matter. But,
@@ -588,14 +599,14 @@ async fn main() {
         all_clients.clone(),
     ));
 
-    let udp_client = tokio::spawn(udp_client(
+    let udp_client_thread = tokio::spawn(udp_client(
         args[1].clone(),
         args[2].clone(),
         signals.clone(),
         servers.clone(),
     ));
 
-    let fault_tolerance = tokio::spawn(fault_tolerance(
+    let fault_tolerance_thread = tokio::spawn(fault_tolerance(
         signals.clone(),
         servers.clone(),
         clients_queue.clone(),
@@ -604,6 +615,6 @@ async fn main() {
 
     tcp_thread.await.unwrap();
     assign_clients_thread.await.unwrap();
-    udp_client.await.unwrap();
-    fault_tolerance.await.unwrap();
+    udp_client_thread.await.unwrap();
+    fault_tolerance_thread.await.unwrap();
 }

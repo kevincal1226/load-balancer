@@ -1,5 +1,186 @@
-2024-12-20 18:38:54 [DEBUG] - Starting assign_clients_to_server thread
-2024-12-20 18:38:54 [DEBUG] - Starting fault_tolerance thread
-2024-12-20 18:38:54 [DEBUG] - Starting udp_client thread
-2024-12-20 18:38:54 [DEBUG] - Starting tcp_client thread
-2024-12-20 18:38:54 [INFO] - Manager started listening on localhost:8080
+2024-12-20 22:19:52 [DEBUG] - Starting assign_clients_to_server thread
+2024-12-20 22:19:52 [DEBUG] - Starting udp_client thread
+2024-12-20 22:19:52 [DEBUG] - Starting fault_tolerance thread
+2024-12-20 22:19:52 [DEBUG] - Starting tcp_client thread
+2024-12-20 22:19:52 [INFO] - Manager started listening on localhost:8080
+2024-12-20 22:19:57 [DEBUG] - New connection from: 127.0.0.1:56180
+2024-12-20 22:19:57 [INFO] - Received TCP message:
+{"host":"localhost","max_clients":1,"message_type":"register","port":"8081"}
+2024-12-20 22:19:57 [DEBUG] - Deserialized TCP JSON:
+{
+  "host": "localhost",
+  "max_clients": 1,
+  "message_type": "register",
+  "port": "8081"
+}
+2024-12-20 22:19:57 [DEBUG] - Register message received
+2024-12-20 22:19:57 [DEBUG] - Attempting to send message: {"message_type":"register_ack"} to localhost:8081
+2024-12-20 22:19:57 [INFO] - Successfully registered server at address localhost:8081
+2024-12-20 22:19:59 [INFO] - Received UDP message:
+{"message_type": "heartbeat", "host": "localhost", "port": "8081"}
+2024-12-20 22:19:59 [DEBUG] - Deserialized UDP JSON:
+{
+  "host": "localhost",
+  "message_type": "heartbeat",
+  "port": "8081"
+}
+2024-12-20 22:20:00 [INFO] - Received UDP message:
+{"message_type": "heartbeat", "host": "localhost", "port": "8081"}
+2024-12-20 22:20:00 [DEBUG] - Deserialized UDP JSON:
+{
+  "host": "localhost",
+  "message_type": "heartbeat",
+  "port": "8081"
+}
+2024-12-20 22:20:02 [INFO] - Received UDP message:
+{"message_type": "heartbeat", "host": "localhost", "port": "8081"}
+2024-12-20 22:20:02 [DEBUG] - Deserialized UDP JSON:
+{
+  "host": "localhost",
+  "message_type": "heartbeat",
+  "port": "8081"
+}
+2024-12-20 22:20:03 [INFO] - Received UDP message:
+{"message_type": "heartbeat", "host": "localhost", "port": "8081"}
+2024-12-20 22:20:03 [DEBUG] - Deserialized UDP JSON:
+{
+  "host": "localhost",
+  "message_type": "heartbeat",
+  "port": "8081"
+}
+2024-12-20 22:20:05 [INFO] - Received UDP message:
+{"message_type": "heartbeat", "host": "localhost", "port": "8081"}
+2024-12-20 22:20:05 [DEBUG] - Deserialized UDP JSON:
+{
+  "host": "localhost",
+  "message_type": "heartbeat",
+  "port": "8081"
+}
+2024-12-20 22:20:06 [INFO] - Received UDP message:
+{"message_type": "heartbeat", "host": "localhost", "port": "8081"}
+2024-12-20 22:20:06 [DEBUG] - Deserialized UDP JSON:
+{
+  "host": "localhost",
+  "message_type": "heartbeat",
+  "port": "8081"
+}
+2024-12-20 22:20:08 [INFO] - Received UDP message:
+{"message_type": "heartbeat", "host": "localhost", "port": "8081"}
+2024-12-20 22:20:08 [DEBUG] - Deserialized UDP JSON:
+{
+  "host": "localhost",
+  "message_type": "heartbeat",
+  "port": "8081"
+}
+2024-12-20 22:20:09 [INFO] - Received UDP message:
+{"message_type": "heartbeat", "host": "localhost", "port": "8081"}
+2024-12-20 22:20:09 [DEBUG] - Deserialized UDP JSON:
+{
+  "host": "localhost",
+  "message_type": "heartbeat",
+  "port": "8081"
+}
+2024-12-20 22:20:11 [INFO] - Received UDP message:
+{"message_type": "heartbeat", "host": "localhost", "port": "8081"}
+2024-12-20 22:20:11 [DEBUG] - Deserialized UDP JSON:
+{
+  "host": "localhost",
+  "message_type": "heartbeat",
+  "port": "8081"
+}
+2024-12-20 22:20:12 [INFO] - Received UDP message:
+{"message_type": "heartbeat", "host": "localhost", "port": "8081"}
+2024-12-20 22:20:12 [DEBUG] - Deserialized UDP JSON:
+{
+  "host": "localhost",
+  "message_type": "heartbeat",
+  "port": "8081"
+}
+2024-12-20 22:20:14 [INFO] - Received UDP message:
+{"message_type": "heartbeat", "host": "localhost", "port": "8081"}
+2024-12-20 22:20:14 [DEBUG] - Deserialized UDP JSON:
+{
+  "host": "localhost",
+  "message_type": "heartbeat",
+  "port": "8081"
+}
+2024-12-20 22:20:15 [INFO] - Received UDP message:
+{"message_type": "heartbeat", "host": "localhost", "port": "8081"}
+2024-12-20 22:20:15 [DEBUG] - Deserialized UDP JSON:
+{
+  "host": "localhost",
+  "message_type": "heartbeat",
+  "port": "8081"
+}
+2024-12-20 22:20:17 [INFO] - Received UDP message:
+{"message_type": "heartbeat", "host": "localhost", "port": "8081"}
+2024-12-20 22:20:17 [DEBUG] - Deserialized UDP JSON:
+{
+  "host": "localhost",
+  "message_type": "heartbeat",
+  "port": "8081"
+}
+2024-12-20 22:20:18 [INFO] - Received UDP message:
+{"message_type": "heartbeat", "host": "localhost", "port": "8081"}
+2024-12-20 22:20:18 [DEBUG] - Deserialized UDP JSON:
+{
+  "host": "localhost",
+  "message_type": "heartbeat",
+  "port": "8081"
+}
+2024-12-20 22:20:20 [INFO] - Received UDP message:
+{"message_type": "heartbeat", "host": "localhost", "port": "8081"}
+2024-12-20 22:20:20 [DEBUG] - Deserialized UDP JSON:
+{
+  "host": "localhost",
+  "message_type": "heartbeat",
+  "port": "8081"
+}
+2024-12-20 22:20:21 [INFO] - Received UDP message:
+{"message_type": "heartbeat", "host": "localhost", "port": "8081"}
+2024-12-20 22:20:21 [DEBUG] - Deserialized UDP JSON:
+{
+  "host": "localhost",
+  "message_type": "heartbeat",
+  "port": "8081"
+}
+2024-12-20 22:20:23 [INFO] - Received UDP message:
+{"message_type": "heartbeat", "host": "localhost", "port": "8081"}
+2024-12-20 22:20:23 [DEBUG] - Deserialized UDP JSON:
+{
+  "host": "localhost",
+  "message_type": "heartbeat",
+  "port": "8081"
+}
+2024-12-20 22:20:24 [INFO] - Received UDP message:
+{"message_type": "heartbeat", "host": "localhost", "port": "8081"}
+2024-12-20 22:20:24 [DEBUG] - Deserialized UDP JSON:
+{
+  "host": "localhost",
+  "message_type": "heartbeat",
+  "port": "8081"
+}
+2024-12-20 22:20:25 [DEBUG] - New connection from: 127.0.0.1:50456
+2024-12-20 22:20:25 [INFO] - Received TCP message:
+{
+"message_type": "shutdown"
+}
+
+2024-12-20 22:20:25 [DEBUG] - Deserialized TCP JSON:
+{
+  "message_type": "shutdown"
+}
+2024-12-20 22:20:25 [DEBUG] - Shutdown message received. Sending message to clients and servers
+2024-12-20 22:20:25 [DEBUG] - Attempting to send message: {"message_type":"shutdown"} to localhost:8081
+2024-12-20 22:20:25 [DEBUG] - Shutting down tcp_client thread
+2024-12-20 22:20:25 [DEBUG] - Shutting down assign_clients_to_server thread
+2024-12-20 22:20:25 [DEBUG] - Shutting down fault_tolerance thread
+2024-12-20 22:20:26 [INFO] - Received UDP message:
+{"message_type": "heartbeat", "host": "localhost", "port": "8081"}
+2024-12-20 22:20:26 [DEBUG] - Deserialized UDP JSON:
+{
+  "host": "localhost",
+  "message_type": "heartbeat",
+  "port": "8081"
+}
+2024-12-20 22:20:26 [DEBUG] - Shutting down udp_client thread

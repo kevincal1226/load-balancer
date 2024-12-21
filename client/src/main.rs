@@ -12,6 +12,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpSocket, UdpSocket};
 use tokio::time::{sleep, timeout, Duration};
 
+type ThreadSafeSignals = Arc<Mutex<HashMap<String, Box<dyn Any + Send + Sync>>>>;
+
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() != 5 {
@@ -20,7 +22,7 @@ fn main() {
     }
 
     let log_file = std::fs::File::create(format!("client_{}_{}.log", args[3], args[4]))
-        .expect("Could not create manager log file");
+        .expect("Could not create client log file");
     let log_file = Mutex::new(log_file);
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .format(move |_, record| {
