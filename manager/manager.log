@@ -1,0 +1,5 @@
+2024-12-20 18:38:54 [DEBUG] - Starting assign_clients_to_server thread
+2024-12-20 18:38:54 [DEBUG] - Starting fault_tolerance thread
+2024-12-20 18:38:54 [DEBUG] - Starting udp_client thread
+2024-12-20 18:38:54 [DEBUG] - Starting tcp_client thread
+2024-12-20 18:38:54 [INFO] - Manager started listening on localhost:8080

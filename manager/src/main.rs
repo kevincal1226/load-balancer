@@ -29,8 +29,6 @@ enum Status {
 
 #[derive(Clone, Debug)]
 struct ServerInfo {
-    host: String,
-    port: String,
     time_since_last_heartbeat: Instant,
     curr_clients: ThreadSafeClientsSet,
     max_clients: usize,
@@ -119,8 +117,34 @@ fn handle_tcp(
     }
     match message_type.as_str().unwrap() {
         "shutdown" => {
-            debug!("Shutdown message received");
-            *signals.lock().unwrap().get_mut("shutdown").unwrap() = Box::new(true);
+            debug!("Shutdown message received. Sending message to clients and servers");
+            signals
+                .lock()
+                .unwrap()
+                .entry("shutdown".to_owned())
+                .and_modify(|e| *e.downcast_mut::<bool>().unwrap() = true);
+
+            all_clients
+                .lock()
+                .unwrap()
+                .iter()
+                .for_each(|(client_addr, _)| {
+                    send_message(
+                        Value::from_str(r#"{"message_type": "shutdown"}"#).unwrap(),
+                        client_addr.0.clone(),
+                        client_addr.1.clone(),
+                    )
+                    .unwrap_or_default();
+                });
+
+            servers.lock().unwrap().iter().for_each(|(server_addr, _)| {
+                send_message(
+                    Value::from_str(r#"{"message_type": "shutdown"}"#).unwrap(),
+                    server_addr.0.clone(),
+                    server_addr.1.clone(),
+                )
+                .unwrap_or_default();
+            });
         }
         "register" => {
             debug!("Register message received");
@@ -185,8 +209,6 @@ fn handle_tcp(
             servers_binding.insert(
                 (host.clone(), port.clone()),
                 ServerInfo {
-                    host: host.clone(),
-                    port: port.clone(),
                     curr_clients: Arc::new(Mutex::new(HashSet::new())),
                     max_clients: max_clients as usize,
                     status: Status::Alive,
@@ -517,11 +539,27 @@ async fn fault_tolerance(
 
 #[tokio::main]
 async fn main() {
-    env_logger::init();
     let args: Vec<String> = env::args().collect();
     if args.len() != 3 {
-        panic!("Usage: RUST_LOG=[debug|info|warn|error] target/release/manager [host] [port]");
+        println!("Usage: RUST_LOG=[debug|info|warn|error] target/release/manager [host] [port]");
+        return;
     }
+
+    let log_file = std::fs::File::create("manager.log").expect("Could not create manager log file");
+    let log_file = Mutex::new(log_file);
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .format(move |_, record| {
+            let mut log_file = log_file.lock().unwrap();
+            writeln!(
+                log_file,
+                "{} [{}] - {}",
+                chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
+                record.level(),
+                record.args()
+            )
+        })
+        .init();
+
     let signals: ThreadSafeSignals = Arc::new(Mutex::new(HashMap::from([(
         "shutdown".to_owned(),
         Box::new(false) as Box<dyn Any + Send + Sync>,
