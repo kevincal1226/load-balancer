@@ -1,13 +1,13 @@
 use log::{debug, error, info, warn};
 use serde_json::Value;
 use std::any::Any;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::HashMap;
 use std::env;
 use std::io::Write;
-use std::net::{SocketAddr, TcpStream};
-use std::sync::{Arc, Mutex, RwLock};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpSocket, UdpSocket};
+use std::net::TcpStream;
+use std::sync::{Arc, Mutex};
+use tokio::io::AsyncReadExt;
+use tokio::net::{TcpListener, UdpSocket};
 use tokio::time::{sleep, timeout, Duration};
 
 type ThreadSafeSignals = Arc<Mutex<HashMap<String, Box<dyn Any + Send + Sync>>>>;
@@ -73,7 +73,6 @@ async fn tcp_client(
                 info!("Received TCP message:\n{received}");
                 match serde_json::from_str::<Value>(&received) {
                     Ok(json) => {
-                        debug!("Deserialized TCP JSON:\n{:#}", json);
                         handle_tcp(signals.clone(), &json);
                     }
                     Err(e) => {

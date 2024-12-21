@@ -4,12 +4,12 @@ use std::any::Any;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::env;
 use std::io::Write;
-use std::net::{SocketAddr, TcpStream};
+use std::net::TcpStream;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpSocket, UdpSocket};
+use tokio::io::AsyncReadExt;
+use tokio::net::{TcpListener, UdpSocket};
 use tokio::time::{sleep, timeout, Duration};
 
 type ThreadSafeSignals = Arc<Mutex<HashMap<String, Box<dyn Any + Send + Sync>>>>;
@@ -38,15 +38,7 @@ struct ServerInfo {
 fn send_message(message: Value, host: String, port: String) -> Result<(), std::io::Error> {
     let addr = format!("{host}:{port}");
     match TcpStream::connect(addr) {
-        Ok(mut socket) => {
-            debug!(
-                "Attempting to send message: {} to {}:{}",
-                message.to_string(),
-                host,
-                port
-            );
-            socket.write_all(message.to_string().as_bytes())
-        }
+        Ok(mut socket) => socket.write_all(message.to_string().as_bytes()),
         Err(e) => Err(std::io::Error::new(std::io::ErrorKind::Other, e)),
     }
 }
@@ -84,7 +76,6 @@ async fn tcp_client(
                 info!("Received TCP message:\n{received}");
                 match serde_json::from_str::<Value>(&received) {
                     Ok(json) => {
-                        debug!("Deserialized TCP JSON:\n{:#}", json);
                         handle_tcp(
                             signals.clone(),
                             servers.clone(),
@@ -455,7 +446,6 @@ async fn udp_client(
 
                 match serde_json::from_str::<Value>(&received) {
                     Ok(json) => {
-                        debug!("Deserialized UDP JSON:\n{:#}", json);
                         handle_udp(&json, servers.clone());
                     }
                     Err(e) => error!(
