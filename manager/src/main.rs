@@ -145,6 +145,23 @@ fn handle_tcp(
                     .unwrap_or_default();
                 });
 
+            all_clients.lock().unwrap().clear();
+
+            clients_queue
+                .lock()
+                .unwrap()
+                .iter()
+                .for_each(|client_addr| {
+                    send_message(
+                        Value::from_str(r#"{"message_type": "shutdown"}"#).unwrap(),
+                        client_addr.0.clone(),
+                        client_addr.1.clone(),
+                    )
+                    .unwrap_or_default();
+                });
+
+            clients_queue.lock().unwrap().clear();
+
             servers.lock().unwrap().iter().for_each(|(server_addr, _)| {
                 send_message(
                     Value::from_str(r#"{"message_type": "shutdown"}"#).unwrap(),
