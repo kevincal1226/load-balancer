@@ -1,0 +1,41 @@
+#!/bin/bash
+
+set -Eeuo pipefail
+
+if [ $# -ne 6 ]; then
+    echo "Usage: ./scripts/start <manager_host> <manager_port> <num_servers> <min_clients_per_server> <max_clients_per_server> <num_clients>"
+    exit 1
+fi
+
+echo "Removing any old log files..."
+find . -type f -name "*.log" -exec rm -f {} \;
+
+cd manager && cargo build --release && cd ..
+cd server && cargo build --release && cd ..
+cd client && cargo build --release && cd ..
+
+cd manager
+RUST_LOG=debug target/release/manager $1 $2 &
+cd ..
+
+i=0
+
+port=$(($2 + 1))
+
+while [ $i -le "$3" ]; do
+    rn=$(shuf -i "$4-$5" -n 1)
+    echo "Starting server on $1 $port with $rn as max_clients..."
+    scripts/create_server "$1" "$2" "$1" "$port" "$rn"
+
+    i=$((i + 1))
+    ((port++))
+done
+
+i=0
+
+while [ $i -le $6 ]; do
+    echo "Starting client on $1 $port..."
+    scripts/create_client $1 $2 $1 $port
+    i=$((i + 1))
+    ((port++))
+done

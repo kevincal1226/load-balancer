@@ -1,0 +1,10 @@
+#!/bin/bash
+
+set -Eeuo pipefail
+
+if [ $# -ne 2 ]; then
+    echo "Usage: ./scripts/send_shutdown <manager_host> <manager_port>\nNote: requires netcat to be installed"
+    exit 1
+fi
+
+echo '{"message_type": "shutdown"}' | nc $1 $2

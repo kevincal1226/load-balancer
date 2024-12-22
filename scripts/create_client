@@ -1,0 +1,18 @@
+#!/bin/bash
+
+set -Eeuo pipefail
+
+if [ $# -ne 4 ]; then
+    echo "Usage: ./scripts/start <manager_host> <manager_port> <client_host> <client_port>"
+    exit 1
+fi
+
+if pgrep -af " $3 $4 " | grep -v "scripts" &>/dev/null; then
+    echo "A process is already running on $3 $4."
+    exit 1
+fi
+
+cd client
+RUST_LOG=debug target/release/client $1 $2 $3 $4 &
+cd ..
+echo "Started up server on $3 $4"

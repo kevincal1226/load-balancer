@@ -1,0 +1,13 @@
+#!/bin/bash
+
+set -Eeuo pipefail
+
+if [ $# -ne 5 ]; then
+    echo "Usage: ./scripts/start <manager_host> <manager_port> <server_host> <server_port> <max_clients>"
+    exit 1
+fi
+
+cd server
+RUST_LOG=debug target/release/server $1 $2 $3 $4 $5 &
+cd ..
+echo "Started up server on $3 $4"

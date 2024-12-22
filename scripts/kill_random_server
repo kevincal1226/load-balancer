@@ -1,0 +1,10 @@
+#!/bin/bash
+
+set -Eeuo pipefail
+
+to_kill=$(pgrep -f "target/release/server" | head -n1)
+
+echo $to_kill | xargs kill
+
+echo "Successfully killed a random server"
+exit 0

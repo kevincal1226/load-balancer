@@ -153,7 +153,15 @@ async fn send_connect_and_disconnect_messages(
             manager_port.clone(),
         ) {
             Ok(()) => info!("Sent client_connect message"),
-            Err(e) => error!("Error occurred while sending client_conenct message: {e}"),
+            Err(e) => {
+                error!("Error occurred while sending client_conenct message: {e}. Assuming manager died. Setting shutdown flag");
+                send_message(
+                    Value::from_str(r#"{"message_type": "shutdown"}"#).unwrap(),
+                    client_host.clone(),
+                    client_port.clone(),
+                )
+                .unwrap_or_default();
+            }
         }
 
         sleep(Duration::from_secs(random::<u64>() % 9 + 1)).await;
@@ -162,8 +170,16 @@ async fn send_connect_and_disconnect_messages(
             manager_host.clone(),
             manager_port.clone(),
         ) {
-            Ok(()) => info!("Sent client_connect message"),
-            Err(e) => error!("Error occurred while ending client_disconenct message: {e}"),
+            Ok(()) => info!("Sent client_disconnect message"),
+            Err(e) => {
+                error!("Error occurred while ending client_disconenct message: {e}. Assuming manager died. Setting shutdown flag");
+                send_message(
+                    Value::from_str(r#"{"message_type": "shutdown"}"#).unwrap(),
+                    client_host.clone(),
+                    client_port.clone(),
+                )
+                .unwrap_or_default();
+            }
         }
     }
 
